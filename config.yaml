@@ -1,4 +1,8 @@
-startup_sound: "/home/pi/suoni/start.wav"
+log_dir: "log"
+sounds_dir: "animal_sounds"
+startup_sound: "startup.wav"
 
 buttons:
-  5: dog
+  "2": gatto
+  "3": cane
+  "4": mucca
