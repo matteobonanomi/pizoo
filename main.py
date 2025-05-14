@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import os
 import sys
 import random
@@ -83,6 +85,7 @@ def extract_config_paths(config):
     shutdown_button_pin = config.get("shutdown_button_pin")
     switch_button_pin = config.get("switch_button_pin")
     buttons = config.get("buttons", {})
+    logger.debug(f"BUTTONS configuration: {buttons}")
     logger.debug(f"Extracted config paths: {log_dir}, {sounds_dir}")
     return log_dir, sounds_dir, startup_sound, shutdown_sound, switch_sound, shutdown_button_pin, switch_button_pin, buttons
 
@@ -126,7 +129,8 @@ def preload_sounds(config):
     global animal_sounds, buttons
     animal_sounds = {}
     buttons = []
-
+    logger.debug("Starting to preload sounds...")
+    
     for pin_str, animal in config.get("buttons", {}).items():
         pin = int(pin_str)
         animal_path = os.path.join(SOUNDS_DIR, animal)
@@ -212,5 +216,16 @@ def switch_config():
             logger.warning(f"Switch sound file not found: {switch_sound_path}")
 
 # === Wait indefinitely for button presses ===
+logger.info("loading sounds")
+preload_sounds(current_config)
+
+if SWITCH_BUTTON_PIN is not None:
+    try:
+        switch_button = Button(int(SWITCH_BUTTON_PIN))
+        switch_button.when_pressed = lambda: [logger.info("Switch button pressed."), switch_config()]
+        logger.info(f"Switch button handler set on GPIO pin {SWITCH_BUTTON_PIN}")
+    except Exception as e:
+        logger.error(f"Failed to set up switch button on pin {SWITCH_BUTTON_PIN}: {str(e)}")
+
 logger.info("System ready. Waiting for button presses...")
 pause()

@@ -1,0 +1,14 @@
+[Unit]
+Description=PiZoo Animal Sound Board
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /home/mbona/PiZoo/main.py
+WorkingDirectory=/home/mbona/PiZoo
+StandardOutput=inherit
+StandardError=inherit
+Restart=always
+User=mbona
+
+[Install]
+WantedBy=multi-user.target
