@@ -1,11 +1,14 @@
 log_dir: "log"
-sounds_dir: "animal_sounds"
+sounds_dir: "sounds"
 startup_sound: "startup.wav"
 shutdown_sound: "shutdown.wav"
 shutdown_button_pin: 27
 switch_sound: "switch_sound.wav"
-switch_button_pin: 17  # Sostituisci con il numero del pin GPIO desiderato
+switch_button_pin: 17
 buttons:
-  "2": gatto
-  "3": cane
-  "4": mucca
+  "26": cow
+  "13": bird
+  "6": cock
+  "5": horse
+  "12": duck
+  "4": sheep
