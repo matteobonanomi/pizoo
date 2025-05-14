@@ -1,4 +1,4 @@
-# 🐾 Animal Sound Game for Raspberry Pi
+# 🐾 PiZoo | Animal Sound Game for Raspberry Pi
 
 An interactive and educational soundboard game designed for children, utilizing physical buttons connected to a Raspberry Pi. Each button triggers a random animal sound, with additional buttons for switching configurations and safely shutting down the system.
 
