@@ -6,9 +6,11 @@ import random
 import yaml
 import pygame
 import logging
+import subprocess
 from gpiozero import Button
 from signal import pause
 from datetime import datetime
+from threading import Lock, Thread
 import time
 
 # === Constants ===
@@ -95,6 +97,62 @@ current_config_index = 0
 current_config = load_yaml_file(yaml_files[current_config_index])
 LOG_DIR, SOUNDS_DIR, STARTUP_SOUND, SHUTDOWN_SOUND, SWITCH_SOUND, SHUTDOWN_BUTTON_PIN, SWITCH_BUTTON_PIN, BUTTONS = extract_config_paths(current_config)
 
+# === Audio output selection ===
+BLUETOOTH_DEVICE = current_config.get("bluetooth_device")
+BLUETOOTH_RETRY_SECONDS = float(current_config.get("bluetooth_retry_seconds", 10))
+audio_output = "analog"
+
+def bluetooth_is_connected(device):
+    """Return whether BlueZ currently reports the configured speaker connected."""
+    if not device:
+        return False
+    try:
+        result = subprocess.run(
+            ["bluetoothctl", "info", device],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        return result.returncode == 0 and "Connected: yes" in result.stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+def connect_bluetooth(device):
+    """Ask BlueZ to reconnect the trusted speaker."""
+    if not device:
+        return False
+    try:
+        subprocess.run(
+            ["bluetoothctl", "connect", device],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=8,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return bluetooth_is_connected(device)
+
+def select_audio_output():
+    """Prefer the configured Bluetooth speaker and otherwise use analog audio."""
+    global audio_output
+
+    if BLUETOOTH_DEVICE and (
+        bluetooth_is_connected(BLUETOOTH_DEVICE)
+        or connect_bluetooth(BLUETOOTH_DEVICE)
+    ):
+        os.environ["SDL_AUDIODRIVER"] = "alsa"
+        os.environ["AUDIODEV"] = (
+            f"bluealsa:DEV={BLUETOOTH_DEVICE},PROFILE=a2dp"
+        )
+        audio_output = "bluetooth"
+    else:
+        os.environ.pop("AUDIODEV", None)
+        audio_output = "analog"
+
+    logger.info("Selected %s audio output", audio_output)
+
 # === Sanity checks ===
 errors = []
 
@@ -116,13 +174,49 @@ if errors:
     sys.exit(1)
 
 # === Initialize pygame mixer ===
-pygame.mixer.pre_init(22050, -16, 1, 512)
-pygame.mixer.init()
-logger.info("Script started. Initializing pygame mixer.")
+select_audio_output()
+if audio_output == "bluetooth":
+    # Match the Edifier A2DP/SBC stream natively. Avoiding live conversion
+    # from the old 22.05 kHz mono format prevents BlueALSA buffer stalls.
+    pygame.mixer.pre_init(48000, -16, 2, 1024)
+else:
+    pygame.mixer.pre_init(22050, -16, 1, 512)
+try:
+    pygame.mixer.init()
+except pygame.error:
+    if audio_output != "bluetooth":
+        raise
+    logger.warning(
+        "Bluetooth audio initialization failed; falling back to analog",
+        exc_info=True,
+    )
+    os.environ.pop("AUDIODEV", None)
+    audio_output = "analog"
+    pygame.mixer.init()
+audio_channel = pygame.mixer.Channel(0)
+logger.info(
+    "Script started. Pygame mixer format: %s",
+    pygame.mixer.get_init(),
+)
 
 # === Preload animal sounds ===
 animal_sounds = {}
 buttons = []
+audio_lock = Lock()
+
+def get_button_bounce_time(config):
+    """Return a safe debounce interval for the physical push buttons."""
+    value = config.get("button_bounce_time", 0.15)
+    try:
+        value = float(value)
+        if value < 0:
+            raise ValueError
+        return value
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid button_bounce_time %r; using 0.15 seconds", value
+        )
+        return 0.15
 
 def preload_sounds(config):
     """Preload sounds for each animal as per the given config."""
@@ -130,15 +224,17 @@ def preload_sounds(config):
     animal_sounds = {}
     buttons = []
     logger.debug("Starting to preload sounds...")
-    
+
+    bounce_time = get_button_bounce_time(config)
+
     for pin_str, animal in config.get("buttons", {}).items():
         pin = int(pin_str)
         animal_path = os.path.join(SOUNDS_DIR, animal)
-        
+
         logger.debug(f"Checking sound directory for '{animal}' at path: {animal_path}")
-        
+
         sounds = []
-        
+
         if not os.path.isdir(animal_path):
             logger.warning(f"Animal sound directory not found: {animal_path}")
             continue
@@ -161,8 +257,8 @@ def preload_sounds(config):
 
         animal_sounds[animal] = sounds
 
-        btn = Button(pin)
-        
+        btn = Button(pin, bounce_time=bounce_time)
+
         # Add debug log in the lambda function to confirm button presses
         btn.when_pressed = lambda a=animal: [play_random_sound(a), logger.debug(f"Button pressed for {a}")]
         buttons.append(btn)
@@ -172,13 +268,34 @@ def play_random_sound(animal):
     sounds = animal_sounds.get(animal, [])
     if sounds:
         logger.debug(f"Playing sound for '{animal}' with {len(sounds)} sound(s) loaded")
-        if pygame.mixer.get_busy():
-            pygame.mixer.stop()
-        sound = random.choice(sounds)
-        sound.play()
+        # gpiozero invokes callbacks from worker threads. Serialize access to
+        # one dedicated channel so a new press replaces the previous sound
+        # without stopping the entire Bluetooth/ALSA mixer stream.
+        with audio_lock:
+            sound = random.choice(sounds)
+            audio_channel.play(sound)
         logger.info(f"Played sound for '{animal}'")
     else:
         logger.warning(f"No sounds available for '{animal}'")
+
+def monitor_bluetooth_audio():
+    """Reconnect the speaker and restart cleanly when the output changes."""
+    while True:
+        time.sleep(max(BLUETOOTH_RETRY_SECONDS, 2))
+
+        connected = bluetooth_is_connected(BLUETOOTH_DEVICE)
+        if not connected and audio_output == "analog":
+            connected = connect_bluetooth(BLUETOOTH_DEVICE)
+
+        wanted_output = "bluetooth" if connected else "analog"
+        if wanted_output != audio_output:
+            logger.info(
+                "Audio output changed from %s to %s; restarting game",
+                audio_output,
+                wanted_output,
+            )
+            logging.shutdown()
+            os._exit(75)
 
 # === Play startup sound ===
 if STARTUP_SOUND:
@@ -208,7 +325,8 @@ def switch_config():
         switch_sound_path = os.path.join(SOUNDS_DIR, SWITCH_SOUND)
         if os.path.isfile(switch_sound_path):  # This checks if the switch sound file exists
             try:
-                pygame.mixer.Sound(switch_sound_path).play()
+                with audio_lock:
+                    audio_channel.play(pygame.mixer.Sound(switch_sound_path))
                 logger.info("Switch sound played.")
             except pygame.error:
                 logger.error("Failed to play switch sound", exc_info=True)
@@ -221,11 +339,18 @@ preload_sounds(current_config)
 
 if SWITCH_BUTTON_PIN is not None:
     try:
-        switch_button = Button(int(SWITCH_BUTTON_PIN))
+        switch_button = Button(
+            int(SWITCH_BUTTON_PIN),
+            bounce_time=get_button_bounce_time(current_config),
+        )
         switch_button.when_pressed = lambda: [logger.info("Switch button pressed."), switch_config()]
         logger.info(f"Switch button handler set on GPIO pin {SWITCH_BUTTON_PIN}")
     except Exception as e:
         logger.error(f"Failed to set up switch button on pin {SWITCH_BUTTON_PIN}: {str(e)}")
 
 logger.info("System ready. Waiting for button presses...")
+
+if BLUETOOTH_DEVICE:
+    Thread(target=monitor_bluetooth_audio, daemon=True).start()
+
 pause()

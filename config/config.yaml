@@ -5,6 +5,9 @@ shutdown_sound: "shutdown.wav"
 shutdown_button_pin: 27
 switch_sound: "switch_sound.wav"
 switch_button_pin: 17
+button_bounce_time: 0.15
+bluetooth_device: "B4:E7:B3:4C:8A:44"
+bluetooth_retry_seconds: 10
 buttons:
   "26": cow
   "13": bird
