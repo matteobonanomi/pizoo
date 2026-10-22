@@ -144,6 +144,7 @@ Logs are stored in the directory specified by `log_dir` in the configuration fil
 
 - If the `config/` directory is missing or contains no `.yaml` files, the program will log an error and exit.
 - Missing audio files or directories for specified animals will generate warnings in the log but will not stop the program from running.
+- See [known issues](known_issues.md) for the documented intermittent Bluetooth audio stall.
 
 ---
 
